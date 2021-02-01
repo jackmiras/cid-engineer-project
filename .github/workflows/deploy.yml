@@ -1,19 +1,47 @@
-name: deploy
+name: deploy-pipeline
 
 on:
   push:
     branches: [ master ]
 
 jobs:
-  build-and-push:
+  tests:
+    name: Tests
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [12.x, 14.x, 15.x]
+
     steps:
-    - uses: kciter/aws-ecr-action@master
+    - uses: actions/checkout@v2
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v1
       with:
-        access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        account_id: ${{ secrets.AWS_ACCOUNT_ID }}
-        repo: cid-engineer-project
-        region: us-east-1
-        tags: latest,${{ github.sha }}
-        create_repo: true
+        node-version: ${{ matrix.node-version }}
+    - run: npm install && npm test
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Authentication AWS
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: ${{secrets.AWS_REGION}}
+          aws-access-key-id: ${{secrets.AWS_ACCESS_KEY_ID}}
+          aws-secret-access-key: ${{secrets.AWS_SECRET_ACCESS_KEY}}
+
+      - name: Build && tag Docker image
+        run : |
+              docker build -t ${{github.sha}} .
+              docker tag ${{github.sha}} 407871788660.dkr.ecr.us-east-1.amazonaws.com/cid-engineer-project:latest
+
+      - name: Deploy
+        run : |
+              aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 407871788660.dkr.ecr.us-east-1.amazonaws.com
+              docker push 407871788660.dkr.ecr.us-east-1.amazonaws.com/cid-engineer-project:latest
+              aws ecs update-service --cluster cid-engineer --service service-cid-engineer-production --force-new-deployment
